@@ -1,1 +1,536 @@
+--========================================--
+-- MzqHub Premium - Optimized Version
+-- CHUNK 1: UI, Utilities, Combat
+--========================================--
 
+-- Load UI Library
+local aboodyoda = loadstring(game:HttpGet("https://raw.githubusercontent.com/aboodyoda/Mzq-hub-Premium/main/Premium%20ui", true))()
+local Library = aboodyoda:Window("MzqHub Premium Optimized", "", "", Enum.KeyCode.P)
+
+--========================================--
+-- TAB SETUP (Grouped for clarity)
+--========================================--
+local CombatTab      = Library:Tab("⚔ Combat")
+local PlayerTab      = Library:Tab("🏃 Player")
+local FarmingTab     = Library:Tab("🌱 Farming")
+local VisualTab      = Library:Tab("🎨 Visual")
+local ESPTab         = Library:Tab("👁 ESP")
+local MiscTab        = Library:Tab("🔧 Misc")
+local NotificationTab= Library:Tab("🔔 Notifications")
+
+--========================================--
+-- UTILITIES MODULE
+--========================================--
+local Utils = {}
+
+-- Safe check: verifies if part exists and is a BasePart
+function Utils.isValidPart(part)
+    return part and part:IsA("BasePart")
+end
+
+-- Get nearest player (excluding self & optional team check)
+function Utils.getNearestPlayer(distanceLimit, teamCheck)
+    local localPlayer = game.Players.LocalPlayer
+    local nearest, shortest = nil, math.huge
+    for _, plr in ipairs(game.Players:GetPlayers()) do
+        if plr ~= localPlayer and plr.Character and Utils.isValidPart(plr.Character:FindFirstChild("HumanoidRootPart")) then
+            if plr.Character:FindFirstChild("Humanoid") and plr.Character.Humanoid.Health > 0 then
+                if (not teamCheck) or (plr.Team ~= localPlayer.Team) then
+                    local dist = (localPlayer.Character.HumanoidRootPart.Position - plr.Character.HumanoidRootPart.Position).Magnitude
+                    if dist < (distanceLimit or math.huge) and dist < shortest then
+                        shortest, nearest = dist, plr
+                    end
+                end
+            end
+        end
+    end
+    return nearest
+end
+
+-- Unified autoPickup function (used by multiple features)
+function Utils.autoPickup(radius, filterName)
+    local localPlayer = game.Players.LocalPlayer
+    local itemsFolder = workspace:FindFirstChild("Items")
+    local root = localPlayer.Character and localPlayer.Character:FindFirstChild("HumanoidRootPart")
+    if not itemsFolder or not Utils.isValidPart(root) then return end
+
+    for _, item in pairs(itemsFolder:GetChildren()) do
+        local canPickup = item:FindFirstChild("Pickup")
+        local part = item:IsA("Model") and item:FindFirstChildWhichIsA("BasePart") or item
+        if canPickup and Utils.isValidPart(part) then
+            if (not filterName or part.Name == filterName) and (part.Position - root.Position).Magnitude <= radius then
+                game.ReplicatedStorage:WaitForChild("Events"):WaitForChild("Pickup"):FireServer(part)
+            end
+        end
+    end
+end
+
+--========================================--
+-- COMBAT MODULE
+--========================================--
+local Combat = {}
+local killing = false
+local killAuraRange = 10
+local ignoreList = {["valensoysantijajaja"] = true, ["SusLordCV"] = true}
+
+-- Kill Aura
+function Combat.isAlive(char)
+    return char and char:FindFirstChild("Humanoid") and char.Humanoid.Health > 0 and Utils.isValidPart(char:FindFirstChild("HumanoidRootPart"))
+end
+
+function Combat.canBeTargeted(plr)
+    local localPlayer = game.Players.LocalPlayer
+    return Combat.isAlive(plr.Character) and plr ~= localPlayer and not ignoreList[plr.Name]
+end
+
+function Combat.startKillAura()
+    game:GetService("RunService").RenderStepped:Connect(function()
+        if killing then
+            local localPlayer = game.Players.LocalPlayer
+            for _, plr in pairs(game.Players:GetPlayers()) do
+                if Combat.canBeTargeted(plr) then
+                    local targetRoot = plr.Character.HumanoidRootPart
+                    if (localPlayer.Character.HumanoidRootPart.Position - targetRoot.Position).Magnitude < killAuraRange then
+                        game.ReplicatedStorage.Events.SwingTool:FireServer({targetRoot})
+                    end
+                end
+            end
+        end
+    end)
+end
+
+CombatTab:Toggle("Kill Aura", false, function(val)
+    killing = val
+    if val then Combat.startKillAura() end
+end)
+
+CombatTab:Slider("Kill Aura Range", 5, 20, 10, function(val)
+    killAuraRange = val
+end)
+
+-- Target Strafing
+local strafing = false
+local strafingRadius = 30
+CombatTab:Toggle("Target Strafe", false, function(val) strafing = val end)
+CombatTab:Slider("Strafing Radius", 5, 100, 30, function(val) strafingRadius = val end)
+
+game:GetService("RunService").Heartbeat:Connect(function()
+    if not strafing then return end
+    local localPlayer = game.Players.LocalPlayer
+    local char = localPlayer.Character
+    if not char or not Utils.isValidPart(char.PrimaryPart) then return end
+
+    local target = Utils.getNearestPlayer(strafingRadius, true)
+    if target and target.Character and Utils.isValidPart(target.Character.PrimaryPart) then
+        local dir = (target.Character.PrimaryPart.Position - char.PrimaryPart.Position).Unit
+        local angle = math.atan2(dir.Z, dir.X) + math.pi / 2
+        local moveDir = Vector3.new(math.sin(angle), 0, math.cos(angle))
+        char.PrimaryPart.Velocity = char.PrimaryPart.Velocity + moveDir
+    end
+end)
+
+-- Auto Heal
+local autoHeal = {enabled=false, threshold=50, fruit="bloodfruit"}
+local itemArgs = {bloodfruit={10}, lemon={22}, bluefruit={34}}
+
+CombatTab:Toggle("Auto Heal", false, function(val) autoHeal.enabled = val end)
+CombatTab:Slider("Heal Threshold", 20, 90, 50, function(val) autoHeal.threshold = val end)
+CombatTab:Dropdown("Fruit", {"bloodfruit", "lemon", "bluefruit"}, function(val) autoHeal.fruit = val end)
+
+local humanoid = game.Players.LocalPlayer.Character and game.Players.LocalPlayer.Character:WaitForChild("Humanoid")
+if humanoid then
+    humanoid:GetPropertyChangedSignal("Health"):Connect(function()
+        if autoHeal.enabled and humanoid.Health < autoHeal.threshold then
+            local healArgs = itemArgs[autoHeal.fruit]
+            if healArgs then
+                game.ReplicatedStorage.Events.UseBagItem:FireServer(unpack(healArgs))
+            end
+        end
+    end)
+end
+
+-- Auto Hut Nearest Player
+CombatTab:Button("Hut Nearest Player (H)", function()
+    local target = Utils.getNearestPlayer(100)
+    if target and target.Character and Utils.isValidPart(target.Character.HumanoidRootPart) then
+        local pos = target.Character.HumanoidRootPart.Position + Vector3.new(10, 10, 10)
+        game.ReplicatedStorage.Events.PlaceStructure:FireServer(pos, "Big Ol' Hut", 0, false)
+    end
+end)
+
+game:GetService("UserInputService").InputBegan:Connect(function(input, processed)
+    if not processed and input.KeyCode == Enum.KeyCode.H then
+        local target = Utils.getNearestPlayer(100)
+        if target then
+            local pos = target.Character.HumanoidRootPart.Position + Vector3.new(10, 10, 10)
+            game.ReplicatedStorage.Events.PlaceStructure:FireServer(pos, "Big Ol' Hut", 0, false)
+        end
+    end
+end)
+
+
+--========================================--
+-- MOVEMENT MODULE
+--========================================--
+local Movement = {}
+local moveConnections = {} -- to store/disconnect old movement toggles
+
+-- Helper: Disconnect old movement connections
+local function disconnectMovement()
+    for _, conn in ipairs(moveConnections) do
+        if conn.Connected then conn:Disconnect() end
+    end
+    moveConnections = {}
+end
+
+-- Walkspeed
+local walk = {enabled=false, speed=16}
+PlayerTab:Toggle("Walkspeed", false, function(val)
+    walk.enabled = val
+    if game.Players.LocalPlayer.Character and game.Players.LocalPlayer.Character:FindFirstChild("Humanoid") then
+        game.Players.LocalPlayer.Character.Humanoid.WalkSpeed = val and walk.speed or 16
+    end
+end)
+PlayerTab:Slider("Walk Speed", 1, 23, 16, function(val)
+    walk.speed = val
+    if walk.enabled and game.Players.LocalPlayer.Character:FindFirstChild("Humanoid") then
+        game.Players.LocalPlayer.Character.Humanoid.WalkSpeed = val
+    end
+end)
+
+-- Speed V2 (CFrame movement)
+local speedV2 = {enabled=false, speed=0.13}
+PlayerTab:Toggle("Speed V2", false, function(val)
+    speedV2.enabled = val
+    disconnectMovement()
+    if val then
+        local char = game.Players.LocalPlayer.Character
+        if char and char:FindFirstChild("Humanoid") then
+            table.insert(moveConnections, game:GetService("RunService").Stepped:Connect(function()
+                if speedV2.enabled then
+                    local root = char:FindFirstChild("HumanoidRootPart")
+                    if Utils.isValidPart(root) then
+                        root.CFrame = root.CFrame + char.Humanoid.MoveDirection * speedV2.speed
+                    end
+                end
+            end))
+        end
+    end
+end)
+PlayerTab:Slider("Speed V2 Multiplier", 0.05, 0.3, 0.13, function(val) speedV2.speed = val end)
+
+-- Fly
+local fly = {enabled=false, speed=27}
+local control = {F=0,B=0,L=0,R=0,Q=0,E=0}
+
+local function toggleFly()
+    fly.enabled = not fly.enabled
+    disconnectMovement()
+    if fly.enabled then
+        local char = game.Players.LocalPlayer.Character
+        if not char then return end
+        local root = char.PrimaryPart
+        local bv = Instance.new("BodyVelocity")
+        bv.MaxForce = Vector3.new(9e9, 9e9, 9e9)
+        bv.Velocity = Vector3.zero
+        bv.Parent = root
+
+        table.insert(moveConnections, game:GetService("RunService").Heartbeat:Connect(function()
+            if fly.enabled then
+                local cam = workspace.CurrentCamera
+                local dir = cam.CFrame.LookVector * (control.F - control.B) + cam.CFrame.RightVector * (control.R - control.L) + cam.CFrame.UpVector * (control.E - control.Q)
+                bv.Velocity = dir.Unit * fly.speed
+            else
+                bv:Destroy()
+            end
+        end))
+    end
+end
+
+PlayerTab:Toggle("Fly", false, function(val)
+    if val ~= fly.enabled then toggleFly() end
+end)
+PlayerTab:Slider("Fly Speed", 1, 50, 27, function(val) fly.speed = val end)
+
+-- Input for fly control
+game:GetService("UserInputService").InputBegan:Connect(function(input, gpe)
+    if gpe then return end
+    if input.KeyCode == Enum.KeyCode.W then control.F = 1
+    elseif input.KeyCode == Enum.KeyCode.S then control.B = 1
+    elseif input.KeyCode == Enum.KeyCode.A then control.L = 1
+    elseif input.KeyCode == Enum.KeyCode.D then control.R = 1
+    elseif input.KeyCode == Enum.KeyCode.Space then control.E = 1
+    elseif input.KeyCode == Enum.KeyCode.LeftControl then control.Q = 1
+    elseif input.KeyCode == Enum.KeyCode.G then toggleFly()
+    end
+end)
+game:GetService("UserInputService").InputEnded:Connect(function(input)
+    if input.KeyCode == Enum.KeyCode.W then control.F = 0
+    elseif input.KeyCode == Enum.KeyCode.S then control.B = 0
+    elseif input.KeyCode == Enum.KeyCode.A then control.L = 0
+    elseif input.KeyCode == Enum.KeyCode.D then control.R = 0
+    elseif input.KeyCode == Enum.KeyCode.Space then control.E = 0
+    elseif input.KeyCode == Enum.KeyCode.LeftControl then control.Q = 0
+    end
+end)
+
+-- Noclip
+local noclip = {enabled=false}
+PlayerTab:Toggle("Noclip", false, function(val)
+    noclip.enabled = val
+    disconnectMovement()
+    if val then
+        table.insert(moveConnections, game:GetService("RunService").Stepped:Connect(function()
+            if noclip.enabled and game.Players.LocalPlayer.Character then
+                for _, part in pairs(game.Players.LocalPlayer.Character:GetChildren()) do
+                    if part:IsA("BasePart") then part.CanCollide = false end
+                end
+            end
+        end))
+    end
+end)
+
+-- Anti-Water Slow
+local antiWater = {enabled=false}
+PlayerTab:Toggle("Anti Water Slow", false, function(val) antiWater.enabled = val end)
+local mt = getrawmetatable(game)
+local oldNewIndex = mt.__newindex
+setreadonly(mt, false)
+mt.__newindex = function(t, i, v)
+    if i == "WalkSpeed" and not checkcaller() and antiWater.enabled then
+        return oldNewIndex(t, i, 16)
+    end
+    return oldNewIndex(t, i, v)
+end
+
+-- Infinite Jump
+local infJump = {enabled=false}
+PlayerTab:Toggle("Infinite Jump", false, function(val)
+    infJump.enabled = val
+end)
+game:GetService("UserInputService").JumpRequest:Connect(function()
+    if infJump.enabled then
+        local humanoid = game.Players.LocalPlayer.Character and game.Players.LocalPlayer.Character:FindFirstChildOfClass("Humanoid")
+        if humanoid then humanoid:ChangeState(Enum.HumanoidStateType.Jumping) end
+    end
+end)
+
+--========================================--
+-- FARMING MODULE
+--========================================--
+local Farming = {}
+
+-- Gold Farm
+local goldFarm = {enabled=false, radius=100}
+FarmingTab:Toggle("Auto Gold Farm", false, function(val)
+    goldFarm.enabled = val
+end)
+game:GetService("RunService").Heartbeat:Connect(function()
+    if goldFarm.enabled then
+        local target = nil
+        local minDist = math.huge
+        for _, obj in pairs(workspace:GetChildren()) do
+            if obj.Name == "Gold Node" then
+                local part = obj:FindFirstChildWhichIsA("BasePart")
+                if Utils.isValidPart(part) then
+                    local dist = (game.Players.LocalPlayer.Character.HumanoidRootPart.Position - part.Position).Magnitude
+                    if dist < goldFarm.radius and dist < minDist then
+                        target = part
+                        minDist = dist
+                    end
+                end
+            end
+        end
+        if target then
+            game.Players.LocalPlayer.Character.HumanoidRootPart.CFrame = CFrame.new(target.Position)
+        end
+    end
+end)
+
+-- Crystal Farm
+local crystalFarm = {enabled=false}
+FarmingTab:Toggle("Crystal Farm", false, function(val) crystalFarm.enabled = val end)
+game:GetService("RunService").Heartbeat:Connect(function()
+    if crystalFarm.enabled then
+        for _, crystal in pairs(workspace.Resources:GetChildren()) do
+            if crystal:IsA("Model") and crystal.Name == "Crystal Lode" and Utils.isValidPart(crystal.PrimaryPart) then
+                game.Players.LocalPlayer.Character.PrimaryPart.CFrame = CFrame.new(crystal.PrimaryPart.Position)
+                break
+            end
+        end
+    end
+end)
+
+-- Sun Tree Farm
+local sunFarm = {enabled=false}
+FarmingTab:Toggle("Sun Tree Farm", false, function(val) sunFarm.enabled = val end)
+game:GetService("RunService").Heartbeat:Connect(function()
+    if sunFarm.enabled then
+        for _, tree in pairs(workspace.Resources:GetChildren()) do
+            if tree:IsA("Model") and tree.Name == "Sun Tree" and Utils.isValidPart(tree.PrimaryPart) then
+                game.Players.LocalPlayer.Character.PrimaryPart.CFrame = CFrame.new(tree.PrimaryPart.Position)
+                break
+            end
+        end
+    end
+end)
+
+-- Essence Pickup
+local essence = {enabled=false, radius=10}
+FarmingTab:Toggle("Pickup Essence", false, function(val) essence.enabled = val end)
+game:GetService("RunService").Heartbeat:Connect(function()
+    if essence.enabled then
+        Utils.autoPickup(essence.radius, "Essence")
+    end
+end)
+FarmingTab:Slider("Essence Radius", 5, 50, 10, function(val) essence.radius = val end)
+
+-- Fruit Planting
+local fruitFarm = {enabled=false, fruit="Bloodfruit"}
+FarmingTab:Toggle("Auto Plant Fruit", false, function(val) fruitFarm.enabled = val end)
+FarmingTab:Dropdown("Fruit", {"Bloodfruit", "Lemon", "Jelly"}, function(val) fruitFarm.fruit = val end)
+game:GetService("RunService").Heartbeat:Connect(function()
+    if fruitFarm.enabled then
+        for _, obj in pairs(workspace.Deployables:GetChildren()) do
+            if obj.Name == "Plant Box" and not obj:FindFirstChild(fruitFarm.fruit) then
+                game.ReplicatedStorage.Events.InteractStructure:FireServer(obj, fruitFarm.fruit)
+            end
+        end
+    end
+end)
+
+-- Auto Harvest
+local autoHarvest = {enabled=false}
+FarmingTab:Toggle("Auto Harvest", false, function(val) autoHarvest.enabled = val end)
+workspace.DescendantAdded:Connect(function(desc)
+    if autoHarvest.enabled and table.find({"Jelly Crop", "Bloodfruit Bush", "Bluefruit Bush", "Lemon Tree"}, desc.Name) then
+        game.ReplicatedStorage.Events.Pickup:FireServer(desc)
+    end
+end)
+
+--========================================--
+-- ESP MODULE
+--========================================--
+local ESP = {}
+local espEnabled = false
+local holder = Instance.new("Folder", game.CoreGui)
+holder.Name = "ESP_Holder"
+
+local function clearESP()
+    for _, v in pairs(holder:GetChildren()) do
+        v:Destroy()
+    end
+end
+
+local function createESPForPlayer(plr)
+    if not plr.Character then return end
+    local box = Instance.new("BoxHandleAdornment")
+    box.Size = Vector3.new(2, 3, 1)
+    box.Color3 = plr.TeamColor.Color
+    box.Transparency = 0.5
+    box.AlwaysOnTop = true
+    box.Adornee = plr.Character:FindFirstChild("HumanoidRootPart")
+    box.Parent = holder
+
+    local nameTag = Instance.new("BillboardGui")
+    nameTag.Size = UDim2.new(0, 200, 0, 50)
+    nameTag.AlwaysOnTop = true
+    nameTag.StudsOffset = Vector3.new(0, 3, 0)
+    nameTag.Adornee = plr.Character:FindFirstChild("Head")
+    nameTag.Parent = holder
+
+    local label = Instance.new("TextLabel", nameTag)
+    label.Size = UDim2.new(1, 0, 1, 0)
+    label.BackgroundTransparency = 1
+    label.Text = plr.Name
+    label.TextColor3 = plr.TeamColor.Color
+    label.TextScaled = true
+end
+
+local function refreshESP()
+    clearESP()
+    for _, plr in pairs(game.Players:GetPlayers()) do
+        if plr ~= game.Players.LocalPlayer then
+            createESPForPlayer(plr)
+        end
+    end
+end
+
+ESPTab:Toggle("ESP", false, function(val)
+    espEnabled = val
+    if not val then
+        clearESP()
+    else
+        refreshESP()
+        task.spawn(function()
+            while espEnabled do
+                refreshESP()
+                task.wait(1)
+            end
+        end)
+    end
+end)
+
+--========================================--
+-- MISC MODULE
+--========================================--
+local Misc = {}
+
+-- Auto Break
+local autoBreak = {enabled=false, radius=20}
+MiscTab:Toggle("Auto Break", false, function(val) autoBreak.enabled = val end)
+MiscTab:Slider("Break Radius", 5, 50, 20, function(val) autoBreak.radius = val end)
+
+game:GetService("RunService").Heartbeat:Connect(function()
+    if autoBreak.enabled then
+        local root = game.Players.LocalPlayer.Character and game.Players.LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+        if Utils.isValidPart(root) then
+            for _, res in pairs(workspace:FindFirstChild("Resources"):GetChildren()) do
+                local target = res:FindFirstChild("small rock") or res:FindFirstChild("reference") or res:FindFirstChild("Trunk") or res:FindFirstChildWhichIsA("BasePart")
+                if Utils.isValidPart(target) and (target.Position - root.Position).Magnitude <= autoBreak.radius then
+                    game.ReplicatedStorage.Events.SwingTool:FireServer({target})
+                end
+            end
+        end
+    end
+end)
+
+-- Auto Pickup (General)
+local autoPickupGeneral = {enabled=false, radius=10}
+MiscTab:Toggle("Auto Pickup", false, function(val) autoPickupGeneral.enabled = val end)
+MiscTab:Slider("Pickup Radius", 5, 50, 10, function(val) autoPickupGeneral.radius = val end)
+
+game:GetService("RunService").Heartbeat:Connect(function()
+    if autoPickupGeneral.enabled then
+        Utils.autoPickup(autoPickupGeneral.radius)
+    end
+end)
+
+--========================================--
+-- VISUAL SETTINGS
+--========================================--
+local fov = {enabled=false, value=70}
+VisualTab:Toggle("FOV Changer", false, function(val)
+    fov.enabled = val
+    workspace.CurrentCamera.FieldOfView = val and fov.value or 70
+end)
+VisualTab:Slider("FOV", 10, 120, 70, function(val)
+    fov.value = val
+    if fov.enabled then
+        workspace.CurrentCamera.FieldOfView = val
+    end
+end)
+
+-- Rain Removal
+VisualTab:Button("Remove Rain", function()
+    for _, obj in ipairs(workspace:GetDescendants()) do
+        if obj:IsA("Part") and obj.Name == "RainPart" then
+            obj:Destroy()
+        end
+    end
+end)
+
+--========================================--
+-- END OF SCRIPT
+--========================================--
+print("[MzqHub] Optimized script loaded successfully.")
